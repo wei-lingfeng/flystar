@@ -178,13 +178,26 @@ class MosaicSelfRef(object):
         trans_class : transforms.Transform2D object (or subclass), optional
             The transform class that will be used to when deriving the optimal
             transformation parameters between each list and the reference list, by default transforms.PolyTransform.
-        trans_args : dict or list of dict, optional
-            A dictionary containing any extra keywords that are needed in the
-            transformation object (for instance, "order"), applied to every
-            iteration -- or a list of such dictionaries, one per iteration, to
-            use a different transformation argument (e.g. increasing order)
-            in later iterations. If a list is passed in, its length must
-            equal the number of iterations. By default {'order': 1}.
+        trans_args : dict, list of dict, or list of list of dict, optional
+            Extra keywords needed by the transformation object (for instance,
+            "order"). Carries a per-list axis as well as a per-iteration one,
+            and is normalized to (N_iters, N_lists). Accepted forms, which
+            mirror ``mag_lim``'s:
+
+            - ``{'order': 2}`` -- those arguments everywhere,
+            - ``[{...}, ...]`` of length N_iters -- per iteration, the same
+              for every starlist (e.g. increasing order in later iterations),
+            - ``[[{...}, ...], ...]`` of shape (N_iters, N_lists) -- fully
+              specified, giving individual starlists their own arguments.
+
+            As with ``mag_lim`` the single axis indexes ITERATIONS, so that
+            one axis means the same thing across every schedule argument; a
+            flat list is never read as per-list. Per-list arguments therefore
+            always use the nested form, and a single iteration of them is
+            ``[[...]]``, with an outer length of 1. Use it when one list needs
+            a different transformation from the rest -- a different
+            instrument, or a detector whose distortion the shared order does
+            not capture. By default {'order': 1}.
         trans_input : transform object, or array or list of them, optional
             If not None, then this should contain an array or list of transform
             objects that will be used as the initial guess in the alignment and matching.
@@ -580,18 +593,48 @@ class MosaicSelfRef(object):
                     f'Got shape {self.mag_lim.shape}.' + extra
                 )
 
-        # Keep a list of trans_args, one per iteration. If only a single dict
-        # is passed in, replicate it for every iteration -- this is also why
-        # the default is a bare dict rather than a length-1 list: a bare dict
-        # stays valid for whatever `iters` is set to, while a list has to be
-        # kept in sync with `iters` by hand.
-        if type(self.trans_args) == dict:
-            tmp = self.trans_args
-            self.trans_args = [tmp for ii in range(self.iters)]
+        # trans_args carries a per-list axis as well as a per-iteration one and
+        # is normalized to (N_iters, N_lists): a list of iterations, each one a
+        # list holding one dict per starlist. Accepted forms mirror mag_lim's:
+        #   {...}                        -> that dict everywhere
+        #   [{...}, ...]   (N_iters)     -> per iteration, same for every list
+        #   [[{...}, ...], ...]          -> (N_iters, N_lists), fully specified
+        # As with mag_lim the single axis indexes ITERATIONS, so that one axis
+        # means the same thing across every schedule argument -- a flat list is
+        # never read as per-list. Per-list arguments therefore always use the
+        # nested form, a single iteration of them being [[...]] with an outer
+        # length of 1. The default stays a bare dict rather than a length-1
+        # list because a bare dict remains valid for whatever `iters` turns out
+        # to be, while a list has to be kept in sync with it by hand.
+        n_lists = len(self.star_lists)
+        if isinstance(self.trans_args, dict):
+            self.trans_args = [self.trans_args] * self.iters
         assert len(self.trans_args) == self.iters, \
             (f'len(trans_args)={len(self.trans_args)} != iters={self.iters}. The '
              f'per-iteration settings must be single values or sequences of the '
              f'same length; iters is the longest one given.')
+
+        rows = []
+        for nn, entry in enumerate(self.trans_args):
+            if isinstance(entry, dict):
+                rows.append([entry] * n_lists)
+                continue
+            entry = list(entry)
+            if not all(isinstance(d, dict) for d in entry):
+                raise ValueError(
+                    f'trans_args[{nn}] must be a dict, or a sequence of dicts with '
+                    f'one entry per starlist. Got {entry!r}.'
+                )
+            if len(entry) != n_lists:
+                raise ValueError(
+                    f'trans_args[{nn}] has {len(entry)} entries but there are '
+                    f'{n_lists} starlists. A per-list trans_args row needs one dict '
+                    f'per starlist; pass a single dict to use it for all of them. '
+                    f'Note the flat list form indexes iterations, not lists, so '
+                    f'per-list arguments for a single iteration are [[...]].'
+                )
+            rows.append(entry)
+        self.trans_args = rows
 
         return
 
@@ -963,9 +1006,13 @@ class MosaicSelfRef(object):
         outlier_tol : float or None
             Sigma threshold for rejecting matched stars from the
             transformation fit. None does no rejection.
-        trans_args : dict
-            Extra keywords for the transformation class this iteration,
-            e.g. {'order': 2}.
+        trans_args : list of dict
+            Extra keywords for the transformation class this iteration, one
+            dict per starlist, e.g. [{'order': 2}, {'order': 3}, ...].
+            ``fix_iterable_conditions`` normalizes ``self.trans_args`` to
+            (N_iters, N_lists), and ``fit`` passes one row of it per
+            iteration, so a caller that wants the same arguments everywhere
+            still just passes a bare dict to ``__init__``.
         nn : int, optional
             Index of the current iteration, used only for progress messages,
             by default None.
@@ -987,6 +1034,10 @@ class MosaicSelfRef(object):
         if self.starlist_vertices is not None:
             import shapely
         for ii in range(len(self.star_lists)):
+            # trans_args is this iteration's row, one dict per starlist --
+            # fix_iterable_conditions normalized it to (N_iters, N_lists) --
+            # so everything below uses the entry for the list being fitted.
+            targs = trans_args[ii]
             if self.verbose > 0:
                 print()
                 print("    **********")
@@ -997,6 +1048,7 @@ class MosaicSelfRef(object):
                 print(f'    |dm| < {dm_tol}')
                 print(f'    outlier tol: {outlier_tol}')
                 print(f'    mag_lim: {self.mag_lim[nn][ii]}')
+                print(f'    trans_args: {targs}')
                 print("    **********")
 
             star_list = self.star_lists[ii]
@@ -1023,7 +1075,7 @@ class MosaicSelfRef(object):
                 trans = trans_initial_guess(
                     ref_list=ref_list[keepers],
                     star_list=star_list_orig_trim,
-                    trans_args=self.trans_args[0],
+                    trans_args=self.trans_args[0][ii],
                     mode=self.init_guess_mode,
                     order=self.init_order,
                     briteN=self.briteN,
@@ -1094,7 +1146,7 @@ class MosaicSelfRef(object):
             # Outlier rejection
             if outlier_tol is not None:
                 keepers =  self.outlier_rejection_indices(star_list_T[idx1], ref_list[idx2], outlier_tol, verbose=self.verbose)
-                keepers = self.guard_outlier_rejection(keepers, trans_args, ii, 'pre-fit')
+                keepers = self.guard_outlier_rejection(keepers, targs, ii, 'pre-fit')
                 if self.verbose > 1:
                     print( '  Rejected ', len(idx1) - sum(keepers), ' outliers.' )
 
@@ -1110,14 +1162,14 @@ class MosaicSelfRef(object):
             trans = self.trans_class.derive_transform(
                 star_list_orig_trim['x'][idx1], star_list_orig_trim['y'][idx1],
                 ref_list['x'][idx2], ref_list['y'][idx2],
-                **trans_args,
+                **targs,
                 m=star_list_orig_trim['m'][idx1], mref=ref_list['m'][idx2],
                 weights=weight, mag_trans=self.mag_trans
             )
             check_transform_finite(
                 trans, len(idx1),
                 f'align.match_and_transform: starlist {ii}, '
-                f'order={trans_args.get("order")} fit'
+                f'order={targs.get("order")} fit'
             )
 
             # Outlier rejection: ref stars in final transformation, if desired.
@@ -1138,7 +1190,7 @@ class MosaicSelfRef(object):
                 # Let's look at just the ref stars used in the transformation, which are idx1 and idx2
                 keepers =  self.outlier_rejection_indices(star_list_T[idx1], ref_list[idx2],
                                                           outlier_tol)
-                keepers = self.guard_outlier_rejection(keepers, trans_args, ii, 'post-fit')
+                keepers = self.guard_outlier_rejection(keepers, targs, ii, 'post-fit')
 
                 # keepers is a boolean MASK over idx2, so len(keepers) is always
                 # len(idx2) -- counting with len() made the message read 0 and
@@ -1173,13 +1225,13 @@ class MosaicSelfRef(object):
                         print( 'Recalculating trans after outlier reject. Using ', len(idx1), ' stars in transformation.' )
                     trans = self.trans_class.derive_transform(star_list_orig_trim['x'][idx1], star_list_orig_trim['y'][idx1],
                                                       ref_list['x'][idx2], ref_list['y'][idx2],
-                                                      **trans_args,
+                                                      **targs,
                                                       m=star_list_orig_trim['m'][idx1], mref=ref_list['m'][idx2],
                                                       weights=weight, mag_trans=self.mag_trans)
                     check_transform_finite(
                         trans, len(idx1),
                         f'align.match_and_transform: starlist {ii}, '
-                        f'order={trans_args.get("order")} refit after outlier '
+                        f'order={targs.get("order")} refit after outlier '
                         f'rejection'
                     )
 
@@ -1195,7 +1247,7 @@ class MosaicSelfRef(object):
                 trans_inv = self.trans_class.derive_transform(
                     ref_list['x'][idx2], ref_list['y'][idx2],
                     star_list_orig_trim['x'][idx1], star_list_orig_trim['y'][idx1],
-                    trans_args['order'], m=ref_list['m'][idx2],
+                    targs['order'], m=ref_list['m'][idx2],
                     mref=star_list_orig_trim['m'][idx1], weights=weight,
                     mag_trans=self.mag_trans
                 )
@@ -2348,9 +2400,18 @@ class MosaicSelfRef(object):
                     weight = None
 
                 # Recalculate transformation
+                # The bootstrap re-derives the transformation this epoch actually
+                # ended on -- self.trans_list[jj], applied just above for the
+                # weights -- so it has to use the arguments that produced it:
+                # the LAST iteration's, for THIS list. It used to read
+                # trans_args[0], which on a rising-order schedule bootstrapped a
+                # lower order than the fit it was quoting errors for (pass 3
+                # here runs order 2 then 3, so the errors came from an order-2
+                # refit). Splatting the whole dict rather than pulling 'order'
+                # out also carries any other transformation argument across.
                 trans = self.trans_class.derive_transform(starlist_boot['x'], starlist_boot['y'],
                                                                    ref_boot['x'], ref_boot['y'],
-                                                                   self.trans_args[0]['order'],
+                                                                   **self.trans_args[-1][jj],
                                                                    m=starlist_boot['m'], mref=ref_boot['m'],
                                                                    weights=weight, mag_trans=self.mag_trans)
                 #print(jj)
@@ -2715,13 +2776,26 @@ class MosaicToRef(MosaicSelfRef):
             The transform class that will be used to when deriving the optimal
             transformation parameters between each list and the reference list.
 
-        trans_args : dict or list of dict, optional
-            A dictionary containing any extra keywords that are needed in the
-            transformation object (for instance, "order"), applied to every
-            iteration -- or a list of such dictionaries, one per iteration, to
-            use a different transformation argument (e.g. increasing order)
-            in later iterations. If a list is passed in, its length must
-            equal the number of iterations. By default {'order': 1}.
+        trans_args : dict, list of dict, or list of list of dict, optional
+            Extra keywords needed by the transformation object (for instance,
+            "order"). Carries a per-list axis as well as a per-iteration one,
+            and is normalized to (N_iters, N_lists). Accepted forms, which
+            mirror ``mag_lim``'s:
+
+            - ``{'order': 2}`` -- those arguments everywhere,
+            - ``[{...}, ...]`` of length N_iters -- per iteration, the same
+              for every starlist (e.g. increasing order in later iterations),
+            - ``[[{...}, ...], ...]`` of shape (N_iters, N_lists) -- fully
+              specified, giving individual starlists their own arguments.
+
+            As with ``mag_lim`` the single axis indexes ITERATIONS, so that
+            one axis means the same thing across every schedule argument; a
+            flat list is never read as per-list. Per-list arguments therefore
+            always use the nested form, and a single iteration of them is
+            ``[[...]]``, with an outer length of 1. Use it when one list needs
+            a different transformation from the rest -- a different
+            instrument, or a detector whose distortion the shared order does
+            not capture. By default {'order': 1}.
 
         trans_input : transform object, or array or list of them, optional
             def = None. If not None, then this should contain an array or list of transform
@@ -3402,7 +3476,8 @@ def schedule_len(value):
     ----------
     value : scalar, None, dict, or sequence
         A schedule argument: ``dr_tol``, ``dm_tol``, ``outlier_tol`` or
-        ``trans_args``.
+        ``trans_args``. For ``trans_args``' nested (N_iters, N_lists) form
+        the outer length is the iteration count, which is what this returns.
 
     Returns
     -------
