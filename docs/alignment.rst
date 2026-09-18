@@ -81,8 +81,9 @@ becomes better known.
        influencing it.
    * - ``trans_args``
      - ``{'order': 1}``
-     - Arguments to ``trans_class``. A single dict applies to every iteration;
-       a list of dicts raises the order as the fit converges.
+     - Arguments to ``trans_class``. A single dict applies everywhere; a list
+       of dicts raises the order as the fit converges; a nested ``(N_iters,
+       N_lists)`` list gives individual starlists their own arguments.
    * - ``mag_lim``
      - ``None``
      - Magnitude range for deriving the transformation. ``[min, max]`` applies
@@ -129,6 +130,18 @@ it.
      - ``AssertionError``: two schedules, of length 2 and 3.
    * - ``dr_tol=[1.0, 0.5, 0.3], dm_tol=[1.0, 1.0]``
      - ``AssertionError``: two schedules, of length 3 and 2.
+
+``trans_args`` has a per-starlist axis on top of its per-iteration one, like
+``mag_lim``, and is normalized to ``(N_iters, N_lists)``. A nested list gives
+individual starlists their own transformation arguments::
+
+   # Three lists, two iterations; the third list is fitted at a higher order.
+   trans_args=[[{'order': 1}, {'order': 1}, {'order': 2}],
+               [{'order': 2}, {'order': 2}, {'order': 3}]]
+
+As with ``mag_lim``, a flat list indexes iterations, never starlists, so
+per-list arguments always use the nested form -- see
+:doc:`transformations` for the full set of forms.
 
 Matching
 --------
@@ -330,9 +343,11 @@ These are handed straight to
    ``motion_models='Linear'`` becomes ``['Empty', 'Fixed', 'Linear']``, and
    ``msc.motion_models`` reports the expanded list rather than what you passed.
 
-   ``trans_args`` is similar but per-iteration rather than per-star: a single
-   dict is broadcast to every iteration, so ``trans_args={'order': 1}`` and
-   ``trans_args=[{'order': 1}] * iters`` are equivalent. See
+   ``trans_args`` broadcasts too, but over iterations and starlists rather
+   than over stars: a single dict is used everywhere, so
+   ``trans_args={'order': 1}`` and ``trans_args=[{'order': 1}] * iters`` are
+   equivalent. It also takes a nested ``(N_iters, N_lists)`` form, for when
+   one list needs a different transformation from the rest. See
    :doc:`transformations`.
 
 Output and bookkeeping

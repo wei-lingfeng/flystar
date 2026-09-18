@@ -61,6 +61,48 @@ class MosaicSelfRef(object):
         msc.fit()
         msc.ref_table['x0']    # averaged positions
         msc.trans_list[0].px   # transformation for the first starlist
+
+    Most settings take either a single value, used for the whole run, or a
+    schedule of one value per iteration; the number of passes is the length
+    of the longest schedule given. ``trans_args`` and ``mag_lim`` go one
+    level further and also take a value per starlist:
+
+    .. code-block:: python
+
+        # Three starlists, two iterations.
+        msc = align.MosaicSelfRef(
+            list_of_starlists,
+            dm_tol=1.0,                               # one value, every iteration
+            dr_tol=[1.0, 0.5],                        # one per iteration
+            outlier_tol=[None, 3.0],                  # no clipping on the first pass
+            trans_args=[{'order': 1}, {'order': 2}],  # raise the order as it converges
+            mag_lim=[13, 19],                         # one [min, max] everywhere
+        )
+
+    The same run, but now the third list is a wide-field camera whose
+    distortion a shared order cannot absorb. The nested form is
+    ``(N_iters, N_lists)``: one entry per starlist, per iteration.
+
+    .. code-block:: python
+
+        msc = align.MosaicSelfRef(
+            list_of_starlists,
+            dr_tol=[1.0, 0.5],
+            trans_args=[[{'order': 1}, {'order': 1}, {'order': 2}],   # pass 1
+                        [{'order': 2}, {'order': 2}, {'order': 3}]],  # pass 2
+            mag_lim=[[[13, 19], [13, 19], [14, 20]],                  # pass 1
+                     [[13, 19], [13, 19], [14, 20]]],                 # pass 2
+        )
+
+    A flat list always indexes iterations, never starlists, even when its
+    length happens to equal the number of lists. Per-list settings therefore
+    always use the nested form, and a single pass of them has an outer
+    length of 1:
+
+    .. code-block:: python
+
+        # One pass; each list gets its own transformation order.
+        trans_args=[[{'order': 1}, {'order': 1}, {'order': 2}]]
     """
     def __init__(
             self,
@@ -2623,7 +2665,9 @@ class MosaicToRef(MosaicSelfRef):
     and simply transform everything onto it.
 
     See :meth:`__init__` for the full list of settings, and
-    :class:`MosaicSelfRef` for the attributes left behind by :meth:`fit`.
+    :class:`MosaicSelfRef` for the attributes left behind by :meth:`fit` and
+    for worked examples of the per-iteration and per-starlist forms that
+    ``trans_args``, ``mag_lim`` and the tolerance schedules accept.
     """
     def __init__(
         self,

@@ -2232,3 +2232,112 @@ def test_iters_from_longest_schedule():
     # mag_lim does not vote: its [min, max] form is a pair, not a schedule.
     msc = build(dr_tol=8., mag_lim=[10, 15])
     assert msc.iters == 1, f'mag_lim set the iteration count: iters={msc.iters}'
+
+
+def test_trans_args_per_list_shape():
+    """
+    trans_args carries a per-list axis as well as a per-iteration one and is
+    normalized to (N_iters, N_lists). A bare dict applies everywhere, a flat
+    list indexes ITERATIONS -- never lists, even when its length happens to
+    match the number of starlists -- and the nested form gives individual
+    starlists their own transformation arguments.
+    """
+    rng = np.random.default_rng(5)
+    n, n_lists = 40, 3
+    names = np.array([f's{i:03d}' for i in range(n)])
+    x0 = rng.uniform(0, 100, n)
+    y0 = rng.uniform(0, 100, n)
+    m0 = rng.uniform(10, 15, n)
+
+    lists = []
+    for e in range(n_lists):
+        sl = starlists.StarList(name=names, x=x0 + rng.normal(0, .01, n),
+                                y=y0 + rng.normal(0, .01, n), m=m0,
+                                xe=np.full(n, .01), ye=np.full(n, .01),
+                                me=np.full(n, .01))
+        sl.meta['list_time'] = 2020.0 + e
+        lists.append(sl)
+
+    def build(**kwargs):
+        return align.MosaicSelfRef(lists, motion_models=['Fixed'],
+                                   init_guess_mode='name', verbose=0, **kwargs)
+
+    # A bare dict: those arguments for every list, every iteration.
+    msc = build(dr_tol=[8., 4.], trans_args={'order': 2})
+    assert msc.trans_args == [[{'order': 2}] * n_lists] * 2, \
+        f'a bare dict did not fill (2, {n_lists}): {msc.trans_args}'
+
+    # A flat list of N_iters dicts: per iteration, the same for every list.
+    msc = build(dr_tol=[8., 4.], trans_args=[{'order': 1}, {'order': 2}])
+    assert msc.trans_args == [[{'order': 1}] * n_lists,
+                              [{'order': 2}] * n_lists], \
+        f'a flat list was not broadcast across lists: {msc.trans_args}'
+
+    # The nested form is kept as given, one dict per list per iteration.
+    nested = [[{'order': 1}, {'order': 1}, {'order': 2}],
+              [{'order': 2}, {'order': 2}, {'order': 3}]]
+    msc = build(dr_tol=[8., 4.], trans_args=nested)
+    assert msc.trans_args == nested, \
+        f'the nested form was not kept as given: {msc.trans_args}'
+
+    # Per-list arguments for a single iteration are [[...]], outer length 1.
+    row = [{'order': 1}, {'order': 2}, {'order': 2}]
+    msc = build(dr_tol=8., trans_args=[row])
+    assert msc.iters == 1, f'[[...]] claimed {msc.iters} iterations, not 1'
+    assert msc.trans_args == [row], f'single-iteration row changed: {msc.trans_args}'
+
+    # The single axis indexes iterations even when its length matches the
+    # number of starlists, so that one axis means the same thing across every
+    # schedule argument. Three dicts and three lists is three ITERATIONS.
+    msc = build(dr_tol=8., trans_args=[{'order': 1}] * n_lists)
+    assert msc.iters == n_lists, \
+        f'a flat list of N_lists dicts gave iters={msc.iters}, not {n_lists}'
+    assert len(msc.trans_args[0]) == n_lists
+
+    # A row that is neither a dict nor one dict per starlist is an error.
+    with pytest.raises(ValueError):
+        build(dr_tol=8., trans_args=[[{'order': 1}, {'order': 2}]])
+    with pytest.raises(ValueError):
+        build(dr_tol=8., trans_args=[[{'order': 1}, {'order': 2}, 'order 3']])
+
+    # The outer length is a schedule like any other, so it has to agree.
+    with pytest.raises(AssertionError):
+        build(dr_tol=[8., 4.], trans_args=[[{'order': 1}] * n_lists])
+
+
+def test_trans_args_per_list_reaches_the_transform():
+    """
+    A per-list trans_args row is not merely stored: each starlist is fitted
+    with its own arguments. The fit converges with the LAST iteration's row,
+    which is the transformation the derived trans_list holds.
+    """
+    rng = np.random.default_rng(6)
+    n, n_lists = 60, 3
+    names = np.array([f's{i:03d}' for i in range(n)])
+    x0 = rng.uniform(20, 180, n)
+    y0 = rng.uniform(20, 180, n)
+    m0 = rng.uniform(13, 19, n)
+
+    lists = []
+    for e in range(n_lists):
+        sl = starlists.StarList(name=names, x=x0 + rng.normal(0, .01, n),
+                                y=y0 + rng.normal(0, .01, n), m=m0,
+                                xe=np.full(n, .01), ye=np.full(n, .01),
+                                me=np.full(n, .01))
+        sl.meta['list_time'] = 2020.0 + e
+        lists.append(sl)
+
+    # One list gets a higher order than the other two -- the case a flat,
+    # per-iteration trans_args could not express.
+    orders = [1, 1, 2]
+    msc = align.MosaicSelfRef(
+        lists, dr_tol=[8., 4.],
+        trans_class=transforms.PolyTransform,
+        trans_args=[[{'order': 1}] * n_lists,
+                    [{'order': o} for o in orders]],
+        motion_models=['Fixed'], init_guess_mode='name', verbose=0)
+    msc.fit()
+
+    for ii, (trans, order) in enumerate(zip(msc.trans_list, orders)):
+        assert trans.order == order, \
+            f'starlist {ii} was fitted at order {trans.order}, not {order}'

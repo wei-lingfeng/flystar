@@ -26,6 +26,18 @@ API changes to ``MosaicSelfRef`` and ``MosaicToRef``
 - ``dm_tol`` now defaults to ``None``, which places no magnitude cut on the
   match. The old default of ``[1.0]`` rejected pairs more than one magnitude
   apart, which is wrong across filters and arbitrary within one.
+- ``trans_args`` now carries a per-starlist axis as well as a per-iteration
+  one, and is normalized to ``(N_iters, N_lists)``. It accepts a bare dict, a
+  flat list of ``N_iters`` dicts, or a nested ``(N_iters, N_lists)`` list, so
+  one epoch can be given a different transformation order from the rest. As
+  with ``mag_lim``, a single axis indexes iterations, so existing calls keep
+  working unchanged; per-list arguments use the nested form, a single
+  iteration of them being ``[[...]]``.
+- ``calc_bootstrap_errors`` now re-fits with the whole ``trans_args`` dict from
+  the last iteration. It had been reaching for ``trans_args[0]['order']``,
+  which took the *first* iteration's order -- bootstrapping a rising-order
+  schedule at the loose starting order rather than the one the fit converged
+  with -- and dropped every other key.
 
 0.1.0 (2026-08-26)
 ==================
