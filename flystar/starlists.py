@@ -451,6 +451,20 @@ def read_starlist(starlistFile, error=True):
 
 
 class StarList(Table):
+    """
+    A catalog of stars measured in a single image.
+
+    An :class:`astropy.table.Table` whose columns are per-star quantities
+    for one starlist: ``name``, ``x``, ``y`` and ``m`` are required, with
+    uncertainties and a fitting correlation optional alongside them. The
+    epoch the list was taken at lives in ``meta['list_time']``, which is
+    what the aligners read when propagating a motion model to this list.
+
+    See :meth:`__init__` for the full set of columns and metadata, and
+    :class:`~flystar.startables.StarTable` for the matched, multi-list
+    counterpart.
+    """
+
     def __init__(self, *args, **kwargs):
         """
         A StarList is an astropy.Table with star catalog from a single image.

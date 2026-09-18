@@ -19,6 +19,24 @@ _MOTION_MODEL_NAME_WIDTH = max(
 )
 
 class StarTable(Table):
+    """
+    A catalog of stars matched across several starlists.
+
+    An :class:`astropy.table.Table` in which the per-list quantities are 2D,
+    with shape ``(N_stars, N_lists)``: row ``i`` of ``x`` holds star ``i``'s
+    position in each of the lists it was detected in. One-dimensional
+    columns hold the per-star results of fitting a motion model across those
+    lists -- see :meth:`fit_motion_models`. The starlists' names and epochs
+    live in ``meta['list_names']`` and ``meta['list_times']``, the latter
+    being the time axis those fits are made against.
+
+    This is the table the aligners leave behind as ``ref_table``; see
+    :class:`flystar.align.MosaicSelfRef`.
+
+    See :meth:`__init__` for the full set of columns and metadata, and
+    :class:`~flystar.starlists.StarList` for the single-image counterpart.
+    """
+
     def __init__(self, *args, ref_list=0, copy=True, **kwargs):
         """
         A StarTable is an astropy.Table with stars matched from multiple starlists.
@@ -86,14 +104,15 @@ class StarTable(Table):
             silently mutate the other.
 
         Examples
-        --------------------------
+        --------
+        .. code-block:: python
 
-        t = startables.StarTable(name=name, x=x, y=y, m=m)
+            t = startables.StarTable(name=name, x=x, y=y, m=m)
 
-        # Access the data:
-        print(t)
-        print(t['name'][0:10])  # print the first 10 star names
-        print(t['x'][0:10, 0])  # print x from the first epoch/list/column for the first 10 stars
+            # Access the data:
+            print(t)
+            print(t['name'][0:10])  # print the first 10 star names
+            print(t['x'][0:10, 0])  # print x from the first epoch/list/column for the first 10 stars
         """
 
         # Check if the required arguments are present
